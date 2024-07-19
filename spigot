@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+
+#region Formatting
+fb() {
+    printf "\e[1m"
+}
+fitalic() {
+    printf "\e[3m"
+}
+fr() {
+    printf "\e[0m"
+}
+#endregion
+
+#region Dependency check
+_check_dependency() {
+    read -r cmd package_name <<<$(echo $*)
+
+    which $cmd >> /dev/null 2>&1 || {
+        echo Required utility $(fb)$cmd$(fr) not found. On most systems, it can be installed from the $(fb)$package_name$(fr) package.
+        exit 1
+    }
+}
+
+_check_dependency basename coreutils
+_check_dependency curl curl
+_check_dependency jq jq
+#endregion
+
+#region API
+fetch_cask() {
+    curl -s "https://formulae.brew.sh/api/cask/$1.json"
+}
+#endregion
+
+#region Command: info
+info() {
+    local cask="$(fetch_cask $2)"
+    printf "$(fb)Names:$(fr) %s\n" "$(echo "$cask" | jq -r '.name | join(", ")')"
+    printf "$(fb)Description:$(fr) %s\n\e[0m" "$(echo "$cask" | jq -r '.desc')"
+    echo "$(fb)Apps:$(fr)"
+    eval "local apps=($(echo "$cask" | jq -r '.artifacts | map(select(.app != null)) | map(.app) | add | map("\"" + . + "\"") | join(" ")'))"
+    for app in "${apps[@]}"; do
+        echo $(fb)-$(fr) $app
+    done
+}
+#endregion
+
+#region Command: install (and related utilities)
+
+download_out_path() {
+    local cask_name=$1
+
+    echo "$HOME/.cache/spigot/dl/$cask_name"
+}
+
+download_file_out() {
+    read -r cask_name download_url <<<$(echo $*)
+
+    local out_path=$(download_out_path $cask_name)
+    mkdir -p $out_path
+
+    local download_file=$(basename "$download_url")
+    echo "$out_path/$download_file"
+}
+
+download_cask() {
+    read -r cask_name download_url sha256 <<<$(echo $*)
+
+    local download_out=$(download_file_out "$cask_name" "$download_url")
+
+    echo Downloading $download_url
+    curl -#o "$download_out" "$download_url"
+
+    printf "Checking signature... "
+
+    download_check_shasum "$download_out" "$sha256"
+
+    if [ $? != 0 ]; then
+        echo "$(fb)not ok$(fr)"
+        exit 1
+    else
+        echo "ok"
+    fi
+}
+
+download_check_shasum() {
+    read -r file sha256 <<<$(echo $*)
+
+    echo "$sha256 *$file" | shasum -a 256 -c - 2>&1 >> /dev/null
+}
+
+extract_cask_files() {
+    read -r cask_name download_url artifacts_json <<<$(echo $*)
+
+    local download_out=$(download_file_out "$cask_name" "$download_url")
+
+    local download_base=$(basename "$download_out")
+    local download_name=${download_base%.*}
+    local download_ext=${download_base##*.}
+
+    local extract_out
+
+    case "$download_ext" in
+        zip) {
+            extract_out="$HOME/.cache/spigot/extract/$cask_name"
+            mkdir -p "$extract_out"
+            unzip -d"$extract_out" "$download_out" >> /dev/null
+        };;
+        tgz|tar.gz) {
+            extract_out="$HOME/.cache/spigot/extract/$cask_name"
+            mkdir -p "$extract_out"
+            tar -C "$extract_out" -xzf "$download_out"
+        };;
+        dmg) {
+            extract_out="/Volumes/$download_name"
+            hdiutil attach "$download_out"
+        };;
+        *) {
+            echo "$(fb)Sorry! I don't understand downloads with a file extension of '$download_ext'. Try using Homebrew for this one.$(fr)"
+            exit 1
+        }
+    esac
+
+    eval "local artifacts=($(echo "$artifacts_json" | jq -r 'map("'\''" + (. | tostring) + "'\''") | join(" ")'))"
+    for artifact in "${artifacts[@]}"; do
+        local silent=0
+        case "$(echo "$artifact" | jq -r keys[0])" in
+            pkg) {
+                local package_file="$(echo "$artifact" | jq -r .pkg[0])"
+                printf "$(fb)install$(fr)\t%s " "$package_file"
+                sudo installer -pkg "$extract_out/$package_file"
+            };;
+            app) {
+                local app_file="$(echo "$artifact" | jq -r .app[0])"
+                printf "$(fb)app$(fr)\t%s" "$app_file"
+                cp -r "$extract_out/$app_file" /Applications/
+            };;
+            zap) silent=1;;
+            *) {
+                printf "$(fb)unknown$(fr)\t%s " "$artifact"
+                false
+            };;
+        esac
+
+        if [ $silent -eq 0 ]; then
+            if [ $? -gt 0 ]; then
+                echo " $(fb)not ok$(fr)"
+            else
+                echo " $(fb)ok$(fr)"
+            fi
+        fi
+    done
+
+    if [ "$download_ext" = "dmg" ]; then
+        hdiutil detach "$download_out"
+    fi
+}
+
+install() {
+    read -r _ cask_name <<<$(echo $*)
+    local info="$(fetch_cask $cask_name)"
+
+    echo Installing $(echo "$info" | jq -r .name[0])
+
+    download_cask "$cask_name" $(echo "$info" | jq -r '.url + " " + .sha256')
+
+    echo Extracting
+    extract_cask_files "$cask_name" "$(echo "$info" | jq -r '.url')" "$(echo "$info" | jq '.artifacts')"
+}
+#endregion
+
+#region Command: help
+help() {
+    cat <<EOF
+Usage: $0 $(fb)<command>$(fr) $(fitalic)[arguments...]$(fr)
+
+Commands:
+$(fb)install$(fr) $(fitalic)<package>$(fr)    Install a package.
+$(fb)info$(fr) $(fitalic)<package>$(fr)       View info about a package.
+EOF
+}
+#endregion
+
+#region Argument parsing
+case $1 in
+    info|in) info $*;;
+    install|i) install $*;;
+    *) help;;
+esac
+#endregion
