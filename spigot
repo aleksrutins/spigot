@@ -136,7 +136,7 @@ extract_cask_files() {
                 printf "$(fb)app$(fr)\t%s" "$app_file"
                 cp -r "$extract_out/$app_file" /Applications/
             };;
-            zap) silent=1;;
+            zap|uninstall) silent=1;;
             *) {
                 printf "$(fb)unknown$(fr)\t%s " "$artifact"
                 false
