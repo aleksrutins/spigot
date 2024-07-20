@@ -35,6 +35,8 @@ fetch_cask() {
 
 #region Command: info
 info() {
+    echo $2
+    echo ----
     local cask="$(fetch_cask $2)"
     printf "$(fb)Names:$(fr) %s\n" "$(echo "$cask" | jq -r '.name | join(", ")')"
     printf "$(fb)Description:$(fr) %s\n\e[0m" "$(echo "$cask" | jq -r '.desc')"
@@ -170,6 +172,18 @@ install() {
 }
 #endregion
 
+#region Command: search
+search() {
+    local query="$2"
+    local cask_tokens=$(curl -s https://formulae.brew.sh/api/cask.json | jq -r 'map(.token) | map(select(test("'"$query"'"))) | join(" ")')
+
+    for cask in $cask_tokens; do
+        info _ "$cask"
+        echo --------
+    done
+}
+#endregion
+
 #region Command: help
 help() {
     cat <<EOF
@@ -178,6 +192,7 @@ Usage: $0 $(fb)<command>$(fr) $(fitalic)[arguments...]$(fr)
 Commands:
 $(fb)install$(fr) $(fitalic)<package>$(fr)    Install a package.
 $(fb)info$(fr) $(fitalic)<package>$(fr)       View info about a package.
+$(fb)search$(fr) $(fitalic)<query>$(fr)       Search for packages by token.
 EOF
 }
 #endregion
@@ -186,6 +201,7 @@ EOF
 case $1 in
     info|in) info $*;;
     install|i) install $*;;
+    search|s) search $*;;
     *) help;;
 esac
 #endregion
